@@ -3,7 +3,7 @@ import sys
 import os
 import requests
 import tkinter as tk
-from tkinter import Scale, filedialog # Explicit import for Scale and filedialog
+from tkinter import Scale, filedialog, ttk, font as tkfont # Explicit import for Scale, filedialog, ttk, and tkfont
 from PIL import ImageTk
 
 # --- Constants for QR Code ---
@@ -11,6 +11,10 @@ from PIL import ImageTk
 QR_CODE_FILENAME = "qr_code.png"
 QR_CODE_TARGET_HEIGHT_RATIO = 0.30  # e.g., 24% of main image height (2x previous 0.12)
 QR_CODE_MARGIN = 20  # pixels from edge
+
+# --- Constants for Fonts ---
+FONTS_FOLDER = "fonts" # Folder relative to the script where TTF files are stored
+SAMPLE_PREVIEW_TEXT = "úys¿ kï b;sx weïv ;uhs''" # Sample text for font preview
 
 def overlay_sinhala_text(image_path, text, ttf_path, output_path):
     # Load image
@@ -101,6 +105,15 @@ def add_qr_code_to_image(image, main_image_height):
     except Exception as e:
         print(f"⚠️ An error occurred while processing QR code '{QR_CODE_FILENAME}': {e}. Skipping QR overlay.")
 
+def find_ttf_fonts(folder_path):
+    """Scans a folder for .ttf files and returns a list of their full paths."""
+    font_files = []
+    if os.path.isdir(folder_path):
+        for filename in os.listdir(folder_path):
+            if filename.lower().endswith(".ttf"):
+                font_files.append(os.path.join(folder_path, filename))
+    return font_files
+
 def generate_overlayed_image(base_pil_image, text_to_draw, ttf_path, font_size_px, text_y_offset_percent=50.0, add_qr=True):
     """
     Draws text and optionally a QR code on a copy of the base_pil_image.
@@ -171,13 +184,11 @@ def convert_unicode_to_legacy(text, output_format="font"):  # options: unicode, 
         raise Exception(f"Sinhala text conversion API request failed: {e}")
 
 class LiveViewApp:
-    def __init__(self, master, initial_image_path, initial_ttf_path):
+    def __init__(self, master):
         self.master = master
         master.title("Font Size Live Preview")
 
-        self.image_path = initial_image_path
-        self.ttf_path = initial_ttf_path
-        self.legacy_text = ""
+        self.image_path = None # Will be set when user selects an image
         self.base_pil_image = None
         self.current_tk_image = None # To prevent garbage collection
 
@@ -186,33 +197,38 @@ class LiveViewApp:
         self.MAX_PREVIEW_HEIGHT = 600 # Max height for the image preview in pixels
 
         # --- Load initial data ---
-        if not os.path.exists(self.image_path):
-            print(f"❌ Error: Initial image file not found: {self.image_path}")
-            # Consider using tkinter.messagebox.showerror for GUI errors
+        # --- Scan for fonts ---
+        self.available_fonts = find_ttf_fonts(FONTS_FOLDER)
+        if not self.available_fonts:
+            print(f"❌ Error: No .ttf fonts found in '{FONTS_FOLDER}'. Please place font files in this folder.")
             master.destroy()
             return
-        if not os.path.exists(self.ttf_path):
-            print(f"❌ Error: Initial font file not found: {self.ttf_path}")
-            master.destroy()
-            return
+        
+        # Store the full path of the initially selected font (first one found)
+        self.selected_font_path = self.available_fonts[0]
 
-        try:
-            # self.legacy_text will be set during update_display after fetching from Entry widget
-            self.base_pil_image = Image.open(self.image_path).convert("RGBA")
-        except Exception as e:
-            print(f"❌ Error loading initial image: {e}")
-            master.destroy()
-            return
-
-        img_width, img_height = self.base_pil_image.size
-        slider_min_font_size = 10
-        slider_max_font_size = int(img_height * 0.8) # Max font size up to 80% of image height
+        # Initialize slider variables with default values
         initial_font_size = 100 # Default font size set to 100
-
         self.font_size_var = tk.IntVar(value=initial_font_size)
-
-        # Variable for text vertical offset (percentage)
         self.text_y_offset_var = tk.DoubleVar(value=20.0) # Default to 20% from the top
+
+        # --- GUI Elements ---
+        # Frame for Font Selection and Preview
+        font_selection_frame = tk.Frame(master)
+        font_selection_frame.pack(fill=tk.X, padx=20, pady=(10,0))
+
+        # Font Selection
+        self.font_label = tk.Label(font_selection_frame, text="Select Font:")
+        self.font_label.pack(side=tk.LEFT, pady=(0,0)) # Pack to the left within the frame
+        font_filenames = [os.path.basename(f) for f in self.available_fonts]
+        self.font_combobox = ttk.Combobox(font_selection_frame, values=font_filenames, state="readonly", width=30)
+        self.font_combobox.set(font_filenames[0]) # Set default selected font
+        self.font_combobox.pack(side=tk.LEFT, padx=(5,10), pady=(0,0))
+        self.font_combobox.bind("<<ComboboxSelected>>", self.update_font_preview)
+
+        # Font Preview Label
+        self.font_preview_label = tk.Label(font_selection_frame, text=SAMPLE_PREVIEW_TEXT, font=("Arial", 16)) # Initial placeholder
+        self.font_preview_label.pack(side=tk.LEFT, pady=(0,0))
  
 
         # --- GUI Elements ---
@@ -224,19 +240,24 @@ class LiveViewApp:
         self.text_input_widget = tk.Text(master, height=4, width=50, font=('Arial', 10), wrap=tk.WORD)
         self.text_input_widget.insert(tk.END, "සිංහල පෙළ\nමෙහි යොදන්න") # Default placeholder text with a newline example
         self.text_input_widget.pack(fill=tk.X, padx=20, pady=(5, 10)) # Padding: 5px top, 10px bottom
+        # Initially disable text input and sliders until image is loaded
+        self.text_input_widget.config(state=tk.DISABLED)
+        self.font_combobox.config(state=tk.DISABLED)
+
 
         # Font size slider
-        self.font_slider = Scale(master, from_=slider_min_font_size, to=slider_max_font_size,
-                                 orient=tk.HORIZONTAL, label="Font Size (px)",
+        self.font_slider = Scale(master, orient=tk.HORIZONTAL, label="Font Size (px)",
                                  variable=self.font_size_var,
-                                 length=max(300, int(img_width * 0.8))) # Make slider reasonably wide
-                                 # Removed command=self.on_font_size_change
-        
+                                 # from_, to_, length will be set after image is loaded
+                                 )
+
         # Slider for Text Vertical Position
-        self.text_y_offset_slider = Scale(master, from_=0.0, to=100.0, resolution=0.5,
-                                          orient=tk.HORIZONTAL, label="Text Vertical Start (%)",
-                                          variable=self.text_y_offset_var,
-                                          length=max(300, int(img_width * 0.8)))
+        self.text_y_offset_slider = Scale(master, orient=tk.HORIZONTAL, label="Text Vertical Start (%)",
+                                          variable=self.text_y_offset_var, # Use the variable initialized earlier
+                                          # from_, to_, length, resolution will be set after image is loaded
+                                          )
+        # Initially disable sliders
+        self.font_slider.config(state=tk.DISABLED)
         self.text_y_offset_slider.pack(fill=tk.X, padx=20, pady=(5,5))
         self.font_slider.pack(fill=tk.X, padx=20, pady=(10, 5)) # Add some padding top and bottom
 
@@ -246,13 +267,19 @@ class LiveViewApp:
         button_frame.pack(pady=(5,10))
 
         self.apply_button = tk.Button(button_frame, text="Apply Settings to Preview", command=self.update_display)
-        self.apply_button.pack(side=tk.LEFT, padx=(0,5)) # Pack to the left, add some right padding
+        self.apply_button.pack(side=tk.LEFT, padx=(0,5))
+        # Initially disable apply/download buttons
+        self.apply_button.config(state=tk.DISABLED)
 
         # Then pack the image label below the slider
         self.image_label = tk.Label(master)
         self.image_label.pack(pady=(0, 10), padx=10) # Adjusted padding
 
-        self.update_display() # Initial display
+        # Add Find Image button
+        self.find_image_button = tk.Button(button_frame, text="Find Image", command=self.find_image)
+        self.find_image_button.pack(side=tk.LEFT, padx=5)
+
+        # self.update_display() # Don't update display until image is loaded
 
         self.download_button = tk.Button(button_frame, text="Download Image", command=self.download_image)
         self.download_button.pack(side=tk.LEFT, padx=(5,0)) # Pack to the left, add some left padding
@@ -263,9 +290,88 @@ class LiveViewApp:
         # For now, we rely on the "Apply Font Size" button to trigger update_display.
         pass
 
+    _font_preview_photo_image = None # Class attribute to prevent garbage collection
+    def update_font_preview(self, event=None):
+        """Updates the font preview label when a new font is selected."""
+        selected_font_filename = self.font_combobox.get() # Retrieve the selected filename
+        new_selected_font_path = next((f for f in self.available_fonts if os.path.basename(f) == selected_font_filename), None)
+
+        if new_selected_font_path:
+            self.selected_font_path = new_selected_font_path # Update the main selected font path
+            try:
+                # --- Image-based preview ---
+                sample_text = "úys¿ kï b;sx weïv ;uhs''"
+                font_size = 20 # Adjust size as needed for preview (pixels)
+                pil_font = ImageFont.truetype(self.selected_font_path, font_size)
+
+                # Determine text size to create an appropriately sized image
+                # Use a dummy draw object to get textbbox
+                dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1,1)))
+                text_bbox = dummy_draw.textbbox((0,0), sample_text, font=pil_font)
+                text_width = text_bbox[2] - text_bbox[0]
+                text_height = text_bbox[3] - text_bbox[1]
+
+                # Create a small transparent image for the text
+                preview_pil_image = Image.new("RGBA", (text_width + 10, text_height + 10), (0,0,0,0)) # Add some padding
+                draw_preview = ImageDraw.Draw(preview_pil_image)
+                draw_preview.text((5, 5 - text_bbox[1]), sample_text, font=pil_font, fill="black") # Adjust y by text_bbox[1]
+
+                # Convert to Tkinter PhotoImage and update label
+                LiveViewApp._font_preview_photo_image = ImageTk.PhotoImage(preview_pil_image) # Store to prevent GC
+                self.font_preview_label.config(image=LiveViewApp._font_preview_photo_image, text="") # Display image, clear text
+            except tk.TclError as e:
+                print(f"⚠️ TclError setting font preview: {e}. Falling back to system font.")
+                self.font_preview_label.config(image=None, text="Preview N/A") # Clear image, show text
+            except Exception as e: # Catch other potential errors during image preview generation
+                print(f"⚠️ Error generating font preview image: {e}.")
+                self.font_preview_label.config(image=None, text="Preview N/A") # Clear image, show text
+
+    def find_image(self):
+        """Opens a file dialog to select the base image."""
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"), ("All files", "*.*")],
+            title="Select Base Image"
+        )
+        if file_path: # If the user selected a file (didn't cancel)
+            try:
+                self.base_pil_image = Image.open(file_path).convert("RGBA")
+                self.image_path = file_path # Store the path if needed later (e.g., for reference)
+
+                # --- Configure sliders based on the newly loaded image size ---
+                # These calculations were previously in __init__ but need the image loaded
+                img_width, img_height = self.base_pil_image.size
+
+                slider_min_font_size = 10
+                slider_max_font_size = int(img_height * 0.8)
+                slider_length = max(300, int(img_width * 0.8))
+
+                self.font_slider.config(from_=slider_min_font_size, to=slider_max_font_size, length=slider_length, state=tk.NORMAL)
+                self.text_y_offset_slider.config(from_=0.0, to=100.0, resolution=0.5, length=slider_length, state=tk.NORMAL)
+                # Ensure current font size is within new range, or reset
+                if self.font_size_var.get() > slider_max_font_size or self.font_size_var.get() < slider_min_font_size:
+                     self.font_size_var.set(max(slider_min_font_size, int(slider_max_font_size / 4))) # Reset to a sensible default
+
+                # Enable controls
+                self.text_input_widget.config(state=tk.NORMAL)
+                self.font_combobox.config(state=tk.NORMAL)
+                # self.text_y_offset_slider.config(state=tk.NORMAL) # Already enabled by the config above
+                self.apply_button.config(state=tk.NORMAL)
+                self.download_button.config(state=tk.NORMAL)
+
+                print(f"✅ Image loaded from {file_path}")
+                self.update_display() # Update preview with the new image
+
+            except Exception as e:
+                print(f"❌ Error loading image '{file_path}': {e}")
+                # Optionally show a tkinter.messagebox.showerror
+
     def update_display(self):
-        if not self.base_pil_image or not self.ttf_path:
-            print("⚠️ Update display called before base image or font path is ready.")
+        # Determine the selected font path first
+        selected_font_filename = self.font_combobox.get()
+        self.selected_font_path = next((f for f in self.available_fonts if os.path.basename(f) == selected_font_filename), None)
+
+        if not self.base_pil_image or not self.selected_font_path:
+            print("⚠️ Update display called before base image or selected font is ready.")
             return
 
         # Get text from tk.Text widget
@@ -273,22 +379,22 @@ class LiveViewApp:
         if not current_unicode_text.strip():
             print("ℹ️ Text input is empty. Displaying image without text overlay (QR code might still be added).")
             current_text_y_offset = self.text_y_offset_var.get()
-            processed_pil_image = generate_overlayed_image(self.base_pil_image, "", self.ttf_path, 1, text_y_offset_percent=current_text_y_offset, add_qr=True)
+            processed_pil_image = generate_overlayed_image(self.base_pil_image, "", self.selected_font_path, 1, text_y_offset_percent=current_text_y_offset, add_qr=True)
         else:
             try:
                 self.legacy_text = convert_unicode_to_legacy(current_unicode_text)
             except Exception as e:
                 print(f"❌ Error converting Sinhala text: {e}. Please check your input or API connection.")
                 current_text_y_offset = self.text_y_offset_var.get()
-                processed_pil_image = generate_overlayed_image(self.base_pil_image, "", self.ttf_path, 1, text_y_offset_percent=current_text_y_offset, add_qr=True)
+                processed_pil_image = generate_overlayed_image(self.base_pil_image, "", self.selected_font_path, 1, text_y_offset_percent=current_text_y_offset, add_qr=True)
                 # Fallthrough to display this processed_pil_image
             else: # if conversion was successful
                 current_font_size = self.font_size_var.get()
                 current_text_y_offset = self.text_y_offset_var.get()
                 if current_font_size <= 0:
                     return # Should not happen if slider min is > 0
-                processed_pil_image = generate_overlayed_image(self.base_pil_image, self.legacy_text, self.ttf_path, current_font_size, text_y_offset_percent=current_text_y_offset, add_qr=True)
-
+                processed_pil_image = generate_overlayed_image(self.base_pil_image, self.legacy_text, self.selected_font_path, current_font_size, text_y_offset_percent=current_text_y_offset, add_qr=True)
+        
         # --- Scale image for display if it's larger than max preview dimensions ---
         display_image = processed_pil_image.copy()
         # Image.Resampling.LANCZOS is a good quality downscaling filter
@@ -301,7 +407,12 @@ class LiveViewApp:
 
     def download_image(self):
         """Generates the full-resolution image with current settings and prompts user to save it."""
-        if not self.base_pil_image or not self.ttf_path:
+        # Check if font is selected and available
+        selected_font_filename = self.font_combobox.get()
+        self.selected_font_path = next((f for f in self.available_fonts if os.path.basename(f) == selected_font_filename), None)
+
+        if not self.base_pil_image or not self.selected_font_path:
+            # Check if font is selected and available
             print("⚠️ Cannot download: Base image or font path not ready.")
             # Optionally show a tkinter.messagebox.showerror
             return
@@ -325,7 +436,7 @@ class LiveViewApp:
         image_to_download = generate_overlayed_image(
             self.base_pil_image,
             final_legacy_text,
-            self.ttf_path,
+            self.selected_font_path, # Use the selected font path
             current_font_size,
             text_y_offset_percent=current_text_y_offset,
             add_qr=True
@@ -346,30 +457,10 @@ class LiveViewApp:
                 # Optionally show a tkinter.messagebox.showerror
 
 if __name__ == "__main__":
-    if "--gui" in sys.argv:
-        gui_arg_index = sys.argv.index("--gui")
-        args = sys.argv[gui_arg_index+1:] # Get arguments after --gui
-        if len(args) != 2: # Expected: image_path, ttf_path
-            print("GUI Usage: python app.py --gui <image_path> <ttf_path>")
-            sys.exit(1)
-        
-        root = tk.Tk()
-        app = LiveViewApp(root, initial_image_path=args[0], initial_ttf_path=args[1])
-        root.mainloop()
-    elif len(sys.argv) == 5: # CLI mode: image_path, text, ttf_path, output_path
-        image_path_cli, text_cli, ttf_path_cli, output_path_cli = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-        if not os.path.exists(image_path_cli) or not os.path.exists(ttf_path_cli):
-            print("❌ Invalid image or font path for CLI.")
-            sys.exit(1)
-        try:
-            legacy_text_cli = convert_unicode_to_legacy(text_cli)
-            if legacy_text_cli:
-                overlay_sinhala_text(image_path_cli, legacy_text_cli, ttf_path_cli, output_path_cli)
-        except Exception as e:
-            print(f"❌ An error occurred during CLI processing: {e}")
-            sys.exit(1)
-    else:
-        print("Invalid arguments. Choose a mode:")
-        print("  CLI Usage: python app.py <image_path> <sinhala_text> <ttf_path> <output_path>")
-        print("  GUI Usage: python app.py --gui <image_path> <ttf_path>")
-        sys.exit(1)
+    # Run GUI mode only
+    root = tk.Tk()
+    app = LiveViewApp(root)
+    # Call update_font_preview once at startup to set the initial preview
+    app.update_font_preview()
+
+    root.mainloop()
