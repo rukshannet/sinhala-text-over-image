@@ -3,7 +3,7 @@ import sys
 import os
 import requests
 import tkinter as tk
-from tkinter import Scale, filedialog, ttk, font as tkfont # Explicit import for Scale, filedialog, ttk, and tkfont
+from tkinter import Scale, filedialog, ttk, font as tkfont, colorchooser # Explicit import for Scale, filedialog, ttk, tkfont, and colorchooser
 from PIL import ImageTk
 
 # --- Constants for QR Code ---
@@ -13,6 +13,7 @@ QR_CODE_TARGET_HEIGHT_RATIO = 0.30  # e.g., 24% of main image height (2x previou
 QR_CODE_MARGIN = 20  # pixels from edge
 
 # --- Constants for Fonts ---
+# These remain global as they are specific to the QR feature
 FONTS_FOLDER = "fonts" # Folder relative to the script where TTF files are stored
 SAMPLE_PREVIEW_TEXT = "úys¿ kï b;sx weïv ;uhs''" # Sample text for font preview
 
@@ -114,7 +115,7 @@ def find_ttf_fonts(folder_path):
                 font_files.append(os.path.join(folder_path, filename))
     return font_files
 
-def generate_overlayed_image(base_pil_image, text_to_draw, ttf_path, font_size_px, text_y_offset_percent=50.0, add_qr=True):
+def generate_overlayed_image(base_pil_image, text_to_draw, ttf_path, font_size_px, text_y_offset_percent=50.0, font_color="white", add_qr=True):
     """
     Draws text and optionally a QR code on a copy of the base_pil_image.
     Returns a new PIL Image object.
@@ -154,7 +155,7 @@ def generate_overlayed_image(base_pil_image, text_to_draw, ttf_path, font_size_p
             draw.text((x + dx_outline, y + dy_outline), text_to_draw, font=font, fill="black")
 
     # White main text
-    draw.text((x, y), text_to_draw, font=font, fill="white")
+    draw.text((x, y), text_to_draw, font=font, fill=font_color)
 
     if add_qr:
         add_qr_code_to_image(image_with_overlay, height)
@@ -186,6 +187,7 @@ def convert_unicode_to_legacy(text, output_format="font"):  # options: unicode, 
 class LiveViewApp:
     def __init__(self, master):
         self.master = master
+        master.geometry("850x700") # Give the window a default size
         master.title("Font Size Live Preview")
 
         self.image_path = None # Will be set when user selects an image
@@ -211,6 +213,9 @@ class LiveViewApp:
         initial_font_size = 100 # Default font size set to 100
         self.font_size_var = tk.IntVar(value=initial_font_size)
         self.text_y_offset_var = tk.DoubleVar(value=20.0) # Default to 20% from the top
+
+        # Variable for font color (hex string)
+        self.font_color_var = tk.StringVar(value="#000000") # Default to black
 
         # --- GUI Elements ---
         # Frame for Font Selection and Preview
@@ -270,11 +275,15 @@ class LiveViewApp:
         self.apply_button.pack(side=tk.LEFT, padx=(0,5))
         # Initially disable apply/download buttons
         self.apply_button.config(state=tk.DISABLED)
+        
+        # Add Select Font Color button
+        self.color_button = tk.Button(button_frame, text="Select Font Color", command=self.select_font_color)
+        self.color_button.pack(side=tk.LEFT, padx=5)
+        self.color_button.config(state=tk.DISABLED) # Initially disabled
 
         # Then pack the image label below the slider
         self.image_label = tk.Label(master)
         self.image_label.pack(pady=(0, 10), padx=10) # Adjusted padding
-
         # Add Find Image button
         self.find_image_button = tk.Button(button_frame, text="Find Image", command=self.find_image)
         self.find_image_button.pack(side=tk.LEFT, padx=5)
@@ -301,7 +310,8 @@ class LiveViewApp:
             try:
                 # --- Image-based preview ---
                 sample_text = "úys¿ kï b;sx weïv ;uhs''"
-                font_size = 20 # Adjust size as needed for preview (pixels)
+                font_size = 20 # Adjust size as needed for preview (pixels) # Keep preview size consistent
+                current_font_color = self.font_color_var.get() # Get current color
                 pil_font = ImageFont.truetype(self.selected_font_path, font_size)
 
                 # Determine text size to create an appropriately sized image
@@ -314,7 +324,7 @@ class LiveViewApp:
                 # Create a small transparent image for the text
                 preview_pil_image = Image.new("RGBA", (text_width + 10, text_height + 10), (0,0,0,0)) # Add some padding
                 draw_preview = ImageDraw.Draw(preview_pil_image)
-                draw_preview.text((5, 5 - text_bbox[1]), sample_text, font=pil_font, fill="black") # Adjust y by text_bbox[1]
+                draw_preview.text((5, 5 - text_bbox[1]), sample_text, font=pil_font, fill=current_font_color) # Draw in selected color
 
                 # Convert to Tkinter PhotoImage and update label
                 LiveViewApp._font_preview_photo_image = ImageTk.PhotoImage(preview_pil_image) # Store to prevent GC
@@ -325,6 +335,16 @@ class LiveViewApp:
             except Exception as e: # Catch other potential errors during image preview generation
                 print(f"⚠️ Error generating font preview image: {e}.")
                 self.font_preview_label.config(image=None, text="Preview N/A") # Clear image, show text
+
+    def select_font_color(self):
+        """Opens a color chooser dialog and updates the font color."""
+        color_code, hex_code = colorchooser.askcolor(initialcolor=self.font_color_var.get(),
+                                                     title="Choose Font Color")
+        if hex_code: # If a color was selected (not None)
+            self.font_color_var.set(hex_code)
+            print(f"ℹ️ Font color set to {hex_code}")
+            # Update preview and main display immediately
+            self.update_font_preview()
 
     def find_image(self):
         """Opens a file dialog to select the base image."""
@@ -357,6 +377,7 @@ class LiveViewApp:
                 # self.text_y_offset_slider.config(state=tk.NORMAL) # Already enabled by the config above
                 self.apply_button.config(state=tk.NORMAL)
                 self.download_button.config(state=tk.NORMAL)
+                self.color_button.config(state=tk.NORMAL) # Enable color button
 
                 print(f"✅ Image loaded from {file_path}")
                 self.update_display() # Update preview with the new image
@@ -393,7 +414,8 @@ class LiveViewApp:
                 current_text_y_offset = self.text_y_offset_var.get()
                 if current_font_size <= 0:
                     return # Should not happen if slider min is > 0
-                processed_pil_image = generate_overlayed_image(self.base_pil_image, self.legacy_text, self.selected_font_path, current_font_size, text_y_offset_percent=current_text_y_offset, add_qr=True)
+                current_font_color = self.font_color_var.get() # Get current color
+                processed_pil_image = generate_overlayed_image(self.base_pil_image, self.legacy_text, self.selected_font_path, current_font_size, text_y_offset_percent=current_text_y_offset, font_color=current_font_color, add_qr=True)
         
         # --- Scale image for display if it's larger than max preview dimensions ---
         display_image = processed_pil_image.copy()
@@ -430,6 +452,7 @@ class LiveViewApp:
 
         current_font_size = self.font_size_var.get()
         current_text_y_offset = self.text_y_offset_var.get()
+        current_font_color = self.font_color_var.get() # Get current color
 
         # Generate the full-resolution image using the original self.base_pil_image
         # Do not use the scaled-down preview image for download.
@@ -438,6 +461,7 @@ class LiveViewApp:
             final_legacy_text,
             self.selected_font_path, # Use the selected font path
             current_font_size,
+            font_color=current_font_color, # Pass the selected color
             text_y_offset_percent=current_text_y_offset,
             add_qr=True
         )
@@ -458,9 +482,13 @@ class LiveViewApp:
 
 if __name__ == "__main__":
     # Run GUI mode only
+    # Check if Pillow supports the necessary resampling filter
+    if not hasattr(Image, 'Resampling') or not hasattr(Image.Resampling, 'LANCZOS'):
+         print("❌ Error: Pillow version is too old. Please upgrade Pillow to version 9.1.0 or later (`pip install --upgrade Pillow`).")
+         sys.exit(1)
+
     root = tk.Tk()
     app = LiveViewApp(root)
     # Call update_font_preview once at startup to set the initial preview
     app.update_font_preview()
-
     root.mainloop()
