@@ -232,7 +232,7 @@ class LiveViewApp:
         self.font_combobox.bind("<<ComboboxSelected>>", self.update_font_preview)
 
         # Font Preview Label
-        self.font_preview_label = tk.Label(font_selection_frame, text=SAMPLE_PREVIEW_TEXT, font=("Arial", 16)) # Initial placeholder
+        self.font_preview_label = tk.Label(font_selection_frame, text=SAMPLE_PREVIEW_TEXT, font=("Arial", 16)) # Use the constant
         self.font_preview_label.pack(side=tk.LEFT, pady=(0,0))
  
 
